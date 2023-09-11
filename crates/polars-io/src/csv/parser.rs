@@ -429,25 +429,24 @@ pub(super) fn parse_lines<'a>(
                 Some((mut field, needs_escaping)) => {
                     let field_len = field.len();
 
-                    if needs_escaping && !ignore_errors {
-                        let has_closing_quote =
-                            field_len > 1 && Some(field[field_len - 1]) == quote_char;
-                        polars_ensure!(
-                            has_closing_quote,
-                            ComputeError: "field '{}' is missing a closing quote",
-                            String::from_utf8_lossy(&field)
-                        );
+                    if field_len > 0 && field[field_len - 1] == b'\r' {
+                        field = &field[..field_len - 1];
                     }
 
                     // +1 is the split character that is consumed by the iterator.
                     read_sol += field_len + 1;
 
+                    if needs_escaping && !ignore_errors {
+                        polars_ensure!(
+                            has_matching_start_end_byte(&field),
+                            ComputeError: "field '{}' is missing a closing quote",
+                            String::from_utf8_lossy(&field)
+                        );
+                    }
+
                     if idx == next_projected as u32 {
                         // the iterator is finished when it encounters a `\n`
                         // this could be preceded by a '\r'
-                        if field_len > 0 && field[field_len - 1] == b'\r' {
-                            field = &field[..field_len - 1];
-                        }
 
                         debug_assert!(processed_fields < buffers.len());
                         let buf = unsafe {
@@ -541,6 +540,42 @@ Consider setting 'truncate_ragged_lines={}'."#, polars_error::constants::TRUE)
     }
 }
 
+/// Checks if the ending byte of a byte buffer matches the first byte,
+/// accounting for escape sequences. A byte is considered escaped when it appears twice consecutively.
+///
+/// # Note
+/// This function returns `false` if the length of `buf` is less than 2, as there are not enough
+/// bytes to compare.
+///
+/// # Arguments
+/// - `buf`: A byte buffer to be checked.
+///
+/// # Returns
+/// Returns `true` if the ending byte matches the first byte, considering escape sequences,
+/// and `false` otherwise.
+#[inline]
+fn has_matching_start_end_byte(buf: &[u8]) -> bool {
+    if buf.len() < 2 {
+        return false;
+    }
+
+    let first = Some(&buf[0]);
+    let mut iter = buf.iter().rev().peekable();
+    let mut matching = false;
+    let mut escaped = false;
+    if iter.next() == first {
+        while iter.next() == first && iter.peek() != None {
+            escaped = !escaped;
+        }
+
+        if !escaped {
+            matching = true;
+        }
+    }
+
+    matching
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -576,5 +611,16 @@ mod test {
         assert_eq!(lines2.next(), Some("1,'foo\n'".as_bytes()));
         assert_eq!(lines2.next(), Some("2,'foo\n'".as_bytes()));
         assert_eq!(lines2.next(), None);
+    }
+
+    #[test]
+    fn test_has_matching_start_end_byte() {
+        assert!(has_matching_start_end_byte(b"``"));
+        assert!(has_matching_start_end_byte(b"`a`"));
+        assert!(has_matching_start_end_byte(b"`a```"));
+        assert!(has_matching_start_end_byte(b"") == false);
+        assert!(has_matching_start_end_byte(b"`") == false);
+        assert!(has_matching_start_end_byte(b"`a") == false);
+        assert!(has_matching_start_end_byte(b"`a``") == false);
     }
 }

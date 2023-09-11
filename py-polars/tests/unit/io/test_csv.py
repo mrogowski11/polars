@@ -1551,13 +1551,13 @@ def test_provide_schema() -> None:
 
 
 @pytest.mark.parametrize(
-    ("input_csv", "expected_error"),
+    "input_csv",
     [
-        (b"""a,b,c\n"A,C,E\nB,D,F""", r"odd number of quote characters in CSV file"),
-        (b"""a,b,c\nA,"C,"E\nB,D,F""", r"field '\"C,\"E' is missing a closing quote"),
+        b"""a,b,c\nA,",E\nB,D,F""",
+        b"""a,b,c\nA,"C,"E\nB,D,F""",
     ],
-    ids=["odd_quotes", "missing_closing_quote"],
+    ids=["single_quote", "missing_closing_quote"],
 )
-def test_csv_quote_mismatch(input_csv: bytes, expected_error: str) -> None:
-    with pytest.raises(pl.ComputeError, match=expected_error):
+def test_csv_quote_mismatch(input_csv: bytes) -> None:
+    with pytest.raises(pl.ComputeError, match=r"field '\"C,\"E' is missing a closing quote"):
         pl.read_csv(input_csv)
